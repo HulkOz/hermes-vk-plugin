@@ -1,6 +1,19 @@
 <!-- fullWidth: false tocVisible: false tableWrap: true -->
 # CHANGELOG
 
+## v1.3.0 (2026-06-10)
+
+### Added
+
+- **`send_carousel()`** — новый метод для отправки каруселей через `messages.send` с `template`
+  - Поддерживает `format_data`, `keyboard`, `reply_to`
+  - Карусель: горизонтально скроллируемые элементы (до 10) с заголовком, описанием, фото, кнопками
+- **`platform_hint`** — теперь описывает:
+  - `[[keyboard:...]]` синтаксис для встраивания клавиатур в `send_message`
+  - Все типы кнопок (text, callback, open_link, location, vkpay, open_app) и цвета
+  - Callback-маршрутизацию (`/vk_` / `/vk_callback:`)
+  - Карусели через `send_carousel()`
+
 ## v1.2.0 (2026-06-03)
 
 ### Changed

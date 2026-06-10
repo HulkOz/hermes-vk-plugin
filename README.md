@@ -14,7 +14,7 @@
 - [Установка](#установка)
 - [Конфигурация](#конфигурация)
 - [Публичный API](#публичный-api)
-- [Inline-клавиатуры](#inline-клавиатуры)
+- [Клавиатуры](#клавиатуры)
 - [Текстовое форматирование](#текстовое-форматирование)
 - [Политики доступа](#политики-доступа)
 - [Multi-account](#multi-account)
@@ -28,7 +28,9 @@
 ### 📨 Сообщения
 
 - **Текст** с нативным форматированием VK (format_data): **жирный**, *курсив*, <u>подчёркнутый</u>, [ссылки](url), ***вложенные*** стили
-- **Inline-клавиатура** — до 10 строк × 4 кнопки (callback / text / open_link / location / vkpay / open_app)
+- **Inline-клавиатура** — у сообщения, до 6 рядов × 5 кнопок, не более 10 (callback / text / open_link / location / vkpay / open_app)
+- **Chat-клавиатура** — под полем ввода, до 10 рядов × 5 кнопок, не более 40
+- **Callback-кнопки** — нажатие без отправки сообщения (`message_event`), ответ через `messages.sendMessageEventAnswer` (show_snackbar / open_link / open_app)
 - **Reply** — ответы с цитированием
 - **Typing indicator** — индикатор набора текста
 - **Редактирование и удаление** отправленных сообщений через `messages.edit` / `messages.delete`
@@ -74,7 +76,7 @@
 
 ## Требования
 
-- [Hermes Agent](https://github.com/nousresearch/hermes) v1.0+
+- [Hermes Agent](https://github.com/nousresearch/hermes) v0.12.0+
 - Python 3.11+
 - `httpx` (устанавливается автоматически)
 - Токен сообщества VK с правами: `messages`, `manage`, `photos`, `docs`
@@ -173,7 +175,14 @@ vk:
 | `format_vk_message(text)`                       | Markdown → VK текст (legacy)         |
 | `parse_markdown(text)`                          | Markdown → Format tree               |
 | `markdown_format_data(text)`                    | Markdown → (plain_text, format_data) |
+| `extract_keyboard_marker(text)`                 | Извлечение `[[keyboard:...]]` из текста |
 | `VKKeyboard(one_time, inline)`                  | Билдер клавиатуры                    |
+| `build_remove_keyboard()`                       | JSON для скрытия клавиатуры          |
+| `make_callback_payload(command, **extra)`        | Сборка payload для callback-кнопки   |
+| `parse_callback_payload(message)`                | Извлечение команды из payload        |
+| `ShowSnackbar(text)`                            | Модель callback-ответа (уведомление) |
+| `OpenLink(link)`                                | Модель callback-ответа (открыть URL) |
+| `OpenApp(app_id, owner_id, hash)`               | Модель callback-ответа (открыть Mini App) |
 | `check_dm_policy(user_id, dm_policy, allow_from)` | Проверка DM политики                 |
 | `check_group_policy(user_id, ...)`              | Проверка групповой политики          |
 | `issue_pairing_challenge(user_id)`              | Выпуск pairing-кода                  |
@@ -186,10 +195,11 @@ vk:
 | ------------------------------------------ | -------------------------- |
 | `send(chat_id, content, reply_to)`         | Отправить текст            |
 | `send_keyboard(chat_id, content, keyboard)` | Отправить с клавиатурой    |
-| `remove_keyboard(chat_id, content)`        | Удалить клавиатуру         |
+| `remove_keyboard(chat_id, content)`        | Скрыть клавиатуру          |
 | `send_image(chat_id, image_url, caption)`  | Отправить изображение      |
 | `send_image_file(chat_id, image_path)`     | Отправить файл изображения |
 | `send_document(chat_id, file_path, caption)` | Отправить документ         |
+| `send_typing(chat_id)`                     | Индикатор набора текста    |
 | `edit_message(chat_id, msg_id, content)`   | Редактировать сообщение    |
 | `delete_message(chat_id, msg_id)`          | Удалить сообщение          |
 | `probe()`                                  | Health check               |
@@ -197,20 +207,24 @@ vk:
 
 ---
 
-## Inline-клавиатуры
+## Клавиатуры
 
-VK поддерживает inline-клавиатуры — кнопки под сообщением. Поддерживается до **10 строк × 4 кнопки**, до **40 символов** на кнопку, до **255 байт** payload.
+VK поддерживает два типа клавиатур:
+- **Inline** (`inline=True`) — кнопки привязаны к сообщению. Макс. 6 рядов × 5 кнопок, всего не более 10.
+- **Chat** (`inline=False`) — кнопки под полем ввода. Макс. 10 рядов × 5 кнопок, всего не более 40.
+
+Ограничения кнопок: до **40 символов** текста, до **255 байт** payload (строгий JSON-объект `{...}`).
 
 ### Типы кнопок
 
 | Тип        | action_type | Описание                                                          |
 | ---------- | ----------- | ----------------------------------------------------------------- |
-| **Текст**  | `text`      | Отправляет callback-текст боту. Требует payload.                  |
-| **Callback** | `callback`  | Аналог text, но кнопка скрывается после нажатия. Требует payload. |
-| **Ссылка** | `open_link` | Открывает URL в браузере. Не требует payload. Требует `link`.     |
+| **Текст**  | `text`      | Отправляет текст кнопки (`label`) как сообщение. Требует payload. |
+| **Callback** | `callback`  | Отправляет боту событие `message_event` **без** сообщения от пользователя. Кнопка не скрывается — показывает спиннер загрузки. Требует payload для идентификации. |
+| **Ссылка** | `open_link` | Открывает URL в браузере. Опциональный payload. Требует `link`.   |
 | **Приложение** | `open_app`  | Открывает VK Mini App. Требует `app_id`, `owner_id`, `hash`.      |
-| **Локация** | `location`  | Запрашивает геолокацию пользователя.                              |
-| **VK Pay** | `vkpay`     | Открывает платёж VK Pay.                                          |
+| **Локация** | `location`  | Запрашивает геолокацию пользователя. Не более 2 таких кнопок в одном ряду. |
+| **VK Pay** | `vkpay`     | Открывает платёж VK Pay. **Должна быть единственной в ряду.**     |
 
 ### Цвета кнопок
 
@@ -243,22 +257,31 @@ await adapter.send(chat_id, "Выберите:", metadata={"keyboard": kb})
 await adapter.remove_keyboard(chat_id)
 ```
 
-### Встраивание в текст сообщения
+### Встраивание клавиатуры в текст сообщения (рекомендуемый способ)
 
 Агент может отправить клавиатуру через обычный `send_message`, вставив `[[keyboard:...]]` в текст. Плагин VK автоматически распознаёт маркер:
 
 ```python
-"Выберите действие: [[keyboard:{\"buttons\":[[{\"action\":{\"type\":\"text\",\"label\":\"✅ Да\"},\"color\":\"positive\"},{\"action\":{\"type\":\"text\",\"label\":\"❌ Нет\"},\"color\":\"negative\"}]],\"inline\":true}]]"
+# [[keyboard:...]] в тексте сообщения → клавиатура прикрепляется автоматически
+send_message(target="vk:123456789", message='''Выберите действие:
+[[keyboard:{"buttons":[[{"action":{"type":"text","label":"✅ Да"},"color":"positive"},{"action":{"type":"text","label":"❌ Нет"},"color":"negative"}]],"inline":true}]]''')
 ```
 
-### Callback-обработка
+Параметры кнопок:
+- `label` — текст кнопки (≤ 40 символов)
+- `payload` — JSON-строка с данными (≤ 255 байт, объект `{...}`)
+- `color` — `primary`, `secondary`, `positive`, `negative`
+- `action_type` — `text`, `callback`, `open_link`, `location`, `vkpay`, `open_app`
+- `link` — URL (для `open_link`)
 
-VK отправляет нажатие кнопки двумя способами:
+### Использование `Keyboard` из кода адаптера
+
+VK отправляет нажатие кнопки двумя разными событиями:
 
 | Тип кнопки | Событие VK            | Как обрабатывается                                            |
 | ---------- | --------------------- | ------------------------------------------------------------- |
-| `text`     | `message_new` + `payload` | Парсится в `_process_update`, текст заменяется на `/vk_<command>` |
-| `callback` | `message_event`       | `_process_callback_event` → создаёт `/vk_callback:<command>`  |
+| `text`     | `message_new` с `payload` | Парсится в `_process_update`, payload извлекается, текст заменяется на `/vk_<command>` |
+| `callback` | `message_event`       | `_process_callback_event` → acknowledgement → создаёт `/vk_callback:<command>` |
 
 ```python
 from vk.keyboard import make_callback_payload, parse_callback_payload
@@ -266,26 +289,97 @@ from vk.keyboard import make_callback_payload, parse_callback_payload
 # Создание payload для кнопки
 payload = make_callback_payload("confirm", item_id=42)
 
-# Парсинг входящего payload (из message_new)
+# Парсинг входящего payload из сообщения (message_new или message_event)
 command = parse_callback_payload(incoming_message)
 # → возвращает "confirm" или None
 ```
 
 Для `callback`-кнопок (`message_event`) адаптер автоматически:
 
-1. Отвечает на событие (acknowledge) — VK не показывает ошибку
-2. Создаёт виртуальное сообщение `/vk_callback:confirm {"item_id":42, ...}`
-3. Диспатчит через `handle_message()` — шлюз обрабатывает как команду
+1. Отвечает на событие через `messages.sendMessageEventAnswer` (acknowledge) — иначе VK показывает ошибку пользователю
+2. При необходимости передаёт `event_data` для клиентского действия (`show_snackbar`, `open_link`, `open_app`)
+3. Создаёт виртуальное сообщение `/vk_callback:confirm {"item_id":42, ...}`
+4. Диспатчит через `handle_message()` — шлюз обрабатывает как команду
+
+#### Модели callback-ответов (`callback_response.py`)
+
+```python
+from vk.callback_response import ShowSnackbar, OpenLink, OpenApp
+
+# Показать всплывающее уведомление (до 90 символов, 10 сек)
+response = ShowSnackbar("Готово! ✅")
+
+# Открыть ссылку
+response = OpenLink("https://example.com")
+
+# Открыть VK Mini App
+response = OpenApp(app_id=6979558, owner_id=-1234, hash="#section")
+
+# Передать в answer_callback_event:
+await adapter._answer_callback_event(
+    event_id=event_id,
+    peer_id=peer_id,
+    user_id=user_id,
+    event_data=response.as_json(),
+)
+```
+
+### Карусели (carousel)
+
+Карусель — горизонтально скроллируемые элементы с заголовком, описанием, картинкой и кнопками.
+
+Отправляется через `adapter.send_carousel()`:
+
+```python
+await adapter.send_carousel(
+    chat_id=chat_id,
+    content="Каталог:",
+    template={
+        "type": "carousel",
+        "elements": [
+            {
+                "title": "Товар 1",
+                "description": "999 ₽",
+                "photo_id": "-123_456",
+                "action": {"type": "open_photo"},
+                "buttons": [{
+                    "action": {"type": "text", "label": "Купить",
+                               "payload": "{\"cmd\":\"buy\"}"},
+                    "color": "primary"
+                }],
+            },
+            {
+                "title": "Товар 2",
+                "description": "1499 ₽",
+                "buttons": [],
+            },
+        ],
+    },
+)
+```
+
+| Параметр элемента | Лимит |
+|-------------------|-------|
+| Количество элементов | 1–10 |
+| `title` | ≤ 80 символов |
+| `description` | ≤ 80 символов |
+| `buttons` на элемент | ≤ 3 |
+| `photo_id` | обязателен для фото, иначе только текст |
+| `action.type` | `open_photo` или `open_link` |
+
+Первый элемент определяет структуру всех остальных (одинаковые поля).
 
 ### Ограничения VK API
 
-| Параметр            | Лимит             |
-| ------------------- | ----------------- |
-| Строк (рядов)       | ≤ **10**          |
-| Кнопок в строке     | ≤ **4**           |
-| Длина текста кнопки | ≤ **40** символов |
-| Размер payload      | ≤ **255** байт (JSON) |
-| Всего кнопок        | ≤ **40**          |
+| Параметр                      | Inline (`inline=True`) | Chat (`inline=False`) |
+| ----------------------------- | ---------------------- | --------------------- |
+| Строк (рядов)                 | ≤ **6**                | ≤ **10**              |
+| Кнопок в строке               | ≤ **5**                | ≤ **5**               |
+| Всего кнопок                  | ≤ **10**               | ≤ **40**              |
+| Длина текста `label`          | ≤ **40** символов      | ≤ **40** символов     |
+| Размер `payload` (JSON-строка) | ≤ **255** байт         | ≤ **255** байт        |
+| Location в одном ряду         | ≤ **2**                | ≤ **2**               |
+| VKPay в ряду                  | **1** (единственная)   | **1** (единственная)  |
 
 ---
 

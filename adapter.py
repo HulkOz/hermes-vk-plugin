@@ -646,6 +646,65 @@ class VKAdapter(BasePlatformAdapter):
         except Exception:
             pass  # Typing indicator is best-effort
 
+    async def send_carousel(
+        self,
+        chat_id: str,
+        content: str,
+        template: dict,
+        keyboard: Optional[dict] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Send a carousel (template) message via VK API.
+
+        VK carousels are horizontal-scrollable elements with
+        title, description, photo, action, and optional buttons.
+
+        The first element defines the structure for all others.
+
+        Args:
+            chat_id: VK peer_id
+            content: Text above the carousel (Markdown)
+            template: Carousel dict: {"type":"carousel","elements":[...]}
+            keyboard: Optional inline keyboard below the carousel
+            reply_to: Message ID to reply to
+        """
+        if not self._http_client or not self._token:
+            return SendResult(success=False, error="Not connected")
+
+        plain_text, format_data = self._format_content_raw(content)
+        template_json = json.dumps(template, ensure_ascii=False)
+
+        params = {
+            "peer_id": chat_id,
+            "message": plain_text,
+            "template": template_json,
+            "random_id": int(time.time() * 1000) & 0x7FFFFFFF,
+        }
+        if format_data:
+            params["format_data"] = format_data
+        if keyboard:
+            params["keyboard"] = json.dumps(keyboard, ensure_ascii=False)
+        if reply_to:
+            params["reply_to"] = reply_to
+
+        async with self._limiters.send:
+            try:
+                result = await self._vk_api_call("messages.send", params)
+                if result and "response" in result:
+                    msg_id = str(result["response"])
+                    await self._register_outgoing(msg_id)
+                    return SendResult(success=True, message_id=msg_id)
+                if result:
+                    error = result.get("error", {}).get("error_msg", str(result))
+                else:
+                    error = "VK API returned no response (connection error or timeout)"
+                logger.warning("[VK] send_carousel failed: %s", error)
+                return SendResult(success=False, error=error)
+            except Exception as e:
+                logger.error("[VK] send_carousel exception: %s", e)
+                return SendResult(success=False, error=str(e), retryable=True)
+
     async def send_image(
         self,
         chat_id: str,
@@ -1802,8 +1861,19 @@ def register(ctx):
             "You are chatting via VK Messenger (VK Мессенджер). "
             "Messages support native formatting: **bold**, *italic*, "
             "<u>underline</u>, ***nested***, and [linked text](url). "
-            "Use vk_keyboard.py for inline keyboards. "
-            "You can send images, documents, and audio via MEDIA: references."
+            "\n\n=== Keyboard ===\n"
+            "Inline keyboard: [[keyboard:{\"buttons\":...,\"inline\":true}]] "
+            "in send_message text. Buttons: text (sends message), "
+            "callback (silent), open_link, location, vkpay, open_app. "
+            "Color: primary, secondary, positive, negative. "
+            "Max 10 buttons inline, 40 chat. "
+            "\n\n=== Callback ===\n"
+            "Text buttons with payload → `/vk_<command>` message. "
+            "Callback buttons → `/vk_callback:<command>` message. "
+            "Reply with show_snackbar (toast), edit_message (navigation). "
+            "\n\n=== Carousel ===\n"
+            "Use send_carousel() with template={\"type\":\"carousel\",\"elements\":[...]}. "
+            "Each element: title(≤80), description(≤80), photo_id, action, buttons(≤3)."
         ),
         emoji="💬",
     )
