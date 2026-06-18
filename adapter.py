@@ -25,7 +25,7 @@ from gateway.platforms.base import (
     SendResult,
 )
 
-from .markdown_vk import markdown_format_data, extract_keyboard_marker
+from .markdown_vk import markdown_format_data, extract_keyboard_marker, extract_carousel_marker
 from .keyboard import (
     VKKeyboard,
     build_remove_keyboard,
@@ -593,6 +593,18 @@ class VKAdapter(BasePlatformAdapter):
             if kbd_data:
                 keyboard = kbd_data
                 content = clean_content
+
+        # Extract [[carousel:...]] marker — if present, delegate to send_carousel()
+        clean_content, carousel_data = extract_carousel_marker(content)
+        if carousel_data:
+            return await self.send_carousel(
+                chat_id=chat_id,
+                content=clean_content,
+                template=carousel_data,
+                keyboard=keyboard,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
         # Parse Markdown → plain text + native format_data
         plain_text, format_data = self._format_content_raw(content)

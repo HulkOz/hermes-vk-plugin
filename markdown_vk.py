@@ -378,6 +378,10 @@ _KEYBOARD_MARKER_RE = re.compile(
     r"\[\[keyboard:\s*(\{.*\})\s*\]\]", re.DOTALL
 )
 
+_CAROUSEL_MARKER_RE = re.compile(
+    r"\[\[carousel:\s*(\{.*\})\s*\]\]", re.DOTALL
+)
+
 
 def extract_keyboard_marker(text: str) -> tuple[str, dict | None]:
     """Extract [[keyboard:...]] marker from message text.
@@ -399,5 +403,34 @@ def extract_keyboard_marker(text: str) -> tuple[str, dict | None]:
         keyboard_data = json.loads(match.group(1))
         clean_text = _KEYBOARD_MARKER_RE.sub("", text).strip()
         return clean_text, keyboard_data
+    except (json.JSONDecodeError, KeyError):
+        return text, None
+
+
+def extract_carousel_marker(text: str) -> tuple[str, dict | None]:
+    """Extract [[carousel:...]] marker from message text.
+
+    The AI can embed a carousel in the message using:
+      [[carousel:{"type":"carousel","elements":[...]}]]
+    The marker is stripped and the carousel is attached
+    to the VK messages.send call via send_carousel().
+
+    Args:
+        text: Raw message text potentially containing [[carousel:...]]
+
+    Returns:
+        (clean_text, carousel_dict_or_None)
+    """
+    if not text:
+        return text, None
+
+    match = _CAROUSEL_MARKER_RE.search(text)
+    if not match:
+        return text, None
+
+    try:
+        carousel_data = json.loads(match.group(1))
+        clean_text = _CAROUSEL_MARKER_RE.sub("", text).strip()
+        return clean_text, carousel_data
     except (json.JSONDecodeError, KeyError):
         return text, None
