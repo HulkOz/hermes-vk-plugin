@@ -31,6 +31,7 @@
 - **Inline-клавиатура** — у сообщения, до 6 рядов × 5 кнопок, не более 10 (callback / text / open_link / location / vkpay / open_app)
 - **Chat-клавиатура** — под полем ввода, до 10 рядов × 5 кнопок, не более 40
 - **Callback-кнопки** — нажатие без отправки сообщения (`message_event`), ответ через `messages.sendMessageEventAnswer` (show_snackbar / open_link / open_app)
+- **Карусели (carousel)** — горизонтально скроллируемые карточки через `adapter.send_carousel()`
 - **Reply** — ответы с цитированием
 - **Typing indicator** — индикатор набора текста
 - **Редактирование и удаление** отправленных сообщений через `messages.edit` / `messages.delete`
@@ -199,6 +200,7 @@ vk:
 | `send_image(chat_id, image_url, caption)`  | Отправить изображение      |
 | `send_image_file(chat_id, image_path)`     | Отправить файл изображения |
 | `send_document(chat_id, file_path, caption)` | Отправить документ         |
+| `send_carousel(chat_id, content, template, keyboard, reply_to)` | Отправить карусель         |
 | `send_typing(chat_id)`                     | Индикатор набора текста    |
 | `edit_message(chat_id, msg_id, content)`   | Редактировать сообщение    |
 | `delete_message(chat_id, msg_id)`          | Удалить сообщение          |
