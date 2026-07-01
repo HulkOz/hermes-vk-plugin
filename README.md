@@ -90,7 +90,7 @@
 
 ```bash
 # Клонировать репозиторий
-git clone https://github.com/dolgof/hermes-vk-plugin
+git clone https://github.com/HulkOz/hermes-vk-plugin
 cd hermes-vk-plugin
 
 # Скопировать в директорию плагинов
