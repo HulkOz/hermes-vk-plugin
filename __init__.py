@@ -1,5 +1,11 @@
 """VK Messenger platform adapter for Hermes Agent."""
 from .adapter import VKAdapter, check_requirements, validate_config, register
+from .commands_menu import (
+    MenuHandler, MenuCommand,
+    build_inline_keyboard, build_chat_keyboard,
+    get_total_pages, get_page_commands,
+    COMMANDS,
+)
 
 # Stage 1 improvements — submodule API
 from .markdown_vk import parse_markdown, markdown_to_plain, markdown_format_data, extract_keyboard_marker

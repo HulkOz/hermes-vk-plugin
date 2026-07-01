@@ -25,7 +25,8 @@ from gateway.platforms.base import (
     SendResult,
 )
 
-from .markdown_vk import markdown_format_data, extract_keyboard_marker, extract_carousel_marker
+from .markdown_vk import markdown_format_data, extract_keyboard_marker
+from .commands_menu import MenuHandler
 from .keyboard import (
     VKKeyboard,
     build_remove_keyboard,
@@ -184,6 +185,7 @@ class VKAdapter(BasePlatformAdapter):
         self._limiters = get_rate_limiters()
 
         self._http_client: Optional["httpx.AsyncClient"] = None
+        self._menu_handler = MenuHandler(adapter=self)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -593,18 +595,6 @@ class VKAdapter(BasePlatformAdapter):
             if kbd_data:
                 keyboard = kbd_data
                 content = clean_content
-
-        # Extract [[carousel:...]] marker — if present, delegate to send_carousel()
-        clean_content, carousel_data = extract_carousel_marker(content)
-        if carousel_data:
-            return await self.send_carousel(
-                chat_id=chat_id,
-                content=clean_content,
-                template=carousel_data,
-                keyboard=keyboard,
-                reply_to=reply_to,
-                metadata=metadata,
-            )
 
         # Parse Markdown → plain text + native format_data
         plain_text, format_data = self._format_content_raw(content)
@@ -1459,6 +1449,16 @@ class VKAdapter(BasePlatformAdapter):
                 )
                 return
 
+        # --- Menu handler: intercept navigation before LLM ---
+        handled, new_text = await self._menu_handler.handle_from_message(
+            text=text, peer_id=peer_id, event_id=msg_id,
+            user_id=int(user_id) if user_id else None,
+        )
+        if handled:
+            if not new_text:
+                return  # already sent response inline
+            event.text = new_text  # replace text with /command_id
+
         await self.handle_message(event)
 
     async def _process_callback_event(self, obj: dict) -> None:
@@ -1539,6 +1539,14 @@ class VKAdapter(BasePlatformAdapter):
             "[VK] Callback event from user %s in chat %s: %s",
             user_id, peer_id, virtual_text,
         )
+
+        # --- Menu handler: intercept menu commands before LLM ---
+        handled = await self._menu_handler.handle(
+            cmd=command, payload=payload,
+            peer_id=peer_id, event_id=event_id, user_id=user_id,
+        )
+        if handled:
+            return
 
         await self.handle_message(event)
 

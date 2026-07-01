@@ -25,6 +25,9 @@ Thumbs.db
 # VK media cache (generated at runtime)
 ~/.hermes/cache/vk_media/
 
+# Backup files
+*.bak
+
 # Pi agent
 .pi/
 pi/
