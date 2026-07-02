@@ -88,6 +88,16 @@ class VKAdapter(BasePlatformAdapter):
         self._api_version = extra.get("api_version", VK_API_VERSION)
         self._upload_url: Optional[str] = extra.get("upload_url")
 
+        # --- YOLO mode (ALL APPROVE) ---
+        # When enabled, every incoming message is automatically approved
+        # without any policy checks — user authorization, dm_policy,
+        # group_policy, allowlists, and pairing are all bypassed.
+        # Can be set via config (`yolo: true`) or env (`VK_YOLO_MODE=true`).
+        self._yolo_mode: bool = (
+            extra.get("yolo", False)
+            or os.getenv("VK_YOLO_MODE", "").lower() in ("true", "1", "yes")
+        )
+
         # --- Multi-account configuration ---
         self._accounts: Dict[str, Dict[str, Any]] = {}
         accounts_cfg = extra.get("accounts", {})
@@ -186,12 +196,13 @@ class VKAdapter(BasePlatformAdapter):
 
         self._http_client: Optional["httpx.AsyncClient"] = None
         self._menu_handler = MenuHandler(adapter=self)
+        self._peers_with_keyboard: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
         try:
             import httpx
         except ImportError:
@@ -234,6 +245,16 @@ class VKAdapter(BasePlatformAdapter):
 
         self._watchdog_task = asyncio.create_task(self._poll_watchdog())
         self._mark_connected()
+
+        # --- YOLO mode activation ---
+        if self._yolo_mode:
+            # Force all account policies to open — no approval/review needed
+            for acct in self._accounts.values():
+                acct["dm_policy"] = "open"
+                acct["group_policy"] = "open"
+            self._dm_policy = "open"
+            self._group_policy = "open"
+            logger.info("[VK] 🎉 YOLO mode active — all incoming messages auto-approved")
 
         active_ids = list(self._account_states.keys()) or [str(self._group_id)]
         logger.info(
@@ -1390,7 +1411,13 @@ class VKAdapter(BasePlatformAdapter):
             event.text = self._format_forwarded(fwd_messages)
 
         # --- Policy checks ---
-        if chat_type == "dm":
+        if self._yolo_mode:
+            # YOLO mode: auto-approve all messages — skip policy checks entirely
+            logger.debug(
+                "[VK] YOLO: auto-approved message from user %s in chat %s",
+                user_id, peer_id,
+            )
+        elif chat_type == "dm":
             allowed, reason = check_dm_policy(
                 user_id=str(user_id) if user_id else "0",
                 dm_policy=self._dm_policy,
@@ -1449,15 +1476,54 @@ class VKAdapter(BasePlatformAdapter):
                 )
                 return
 
-        # --- Menu handler: intercept navigation before LLM ---
-        handled, new_text = await self._menu_handler.handle_from_message(
-            text=text, peer_id=peer_id, event_id=msg_id,
-            user_id=int(user_id) if user_id else None,
-        )
-        if handled:
-            if not new_text:
-                return  # already sent response inline
-            event.text = new_text  # replace text with /command_id
+        # --- Send chat keyboard once per peer ---
+        peer_str = str(peer_id)
+        if peer_str not in self._peers_with_keyboard:
+            self._peers_with_keyboard.add(peer_str)
+            logger.debug("[VK] 🖥️ Sending chat keyboard for peer %s", peer_str)
+            try:
+                await self._menu_handler.send_chat_keyboard(peer_id)
+                logger.debug("[VK] ✅ Chat keyboard sent for peer %s", peer_str)
+            except Exception as e:
+                logger.error("[VK] ❌ Chat keyboard failed for peer %s: %s", peer_str, e)
+
+        # --- Menu handler: intercept commands before LLM ---
+        # Try payload-based interception first (text button payload contains cmd+page)
+        menu_cmd = None
+        menu_payload = {}
+        if callback_data:
+            try:
+                import json
+                parsed = json.loads(callback_data)
+                if isinstance(parsed, dict):
+                    menu_cmd = parsed.get("cmd")
+                    menu_payload = {k: v for k, v in parsed.items() if k != "cmd"}
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if menu_cmd and self._menu_handler.is_menu_command(menu_cmd):
+            # Navigation (commands/nav) — handle locally, 0 tokens
+            handled = await self._menu_handler.handle(
+                cmd=menu_cmd, payload=menu_payload,
+                peer_id=peer_id, event_id=msg_id,
+                user_id=int(user_id) if user_id else None,
+            )
+            if handled:
+                return
+        elif menu_cmd and self._menu_handler.is_known_command(menu_cmd):
+            # Known command from button — replace text for LLM
+            event.text = f"/{menu_cmd}"
+        else:
+            # Fallback: text matching (for "📋 Команды" without payload etc.)
+            handled, new_text = await self._menu_handler.handle_from_message(
+                text=text, peer_id=peer_id, event_id=msg_id,
+                user_id=int(user_id) if user_id else None,
+            )
+            if handled:
+                if not new_text:
+                    return
+                event.text = new_text
+
 
         await self.handle_message(event)
 
@@ -1479,11 +1545,21 @@ class VKAdapter(BasePlatformAdapter):
         payload_raw = obj.get("payload", "")
 
         if not peer_id or not event_id:
+            logger.debug(
+                "[VK] ❌ Callback event missing peer_id or event_id: peer_id=%s event_id=%s",
+                peer_id, event_id,
+            )
             return
+
+        logger.debug(
+            "[VK] 🔄 Callback event received: peer_id=%s user_id=%s event_id=%s payload=%s",
+            peer_id, user_id, event_id, payload_raw,
+        )
 
         # Parse payload
         command = None
         extra_data = ""
+        payload: dict = {}
         if payload_raw:
             try:
                 payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
@@ -1548,6 +1624,14 @@ class VKAdapter(BasePlatformAdapter):
         if handled:
             return
 
+        # Known command from callback button → rewrite event text as /cmd
+        if command and self._menu_handler.is_known_command(command):
+            event.text = f"/{command}"
+            logger.debug(
+                "[VK] Callback: known command %s → rewriting to /%s",
+                command, command,
+            )
+
         await self.handle_message(event)
 
     async def _answer_callback_event(
@@ -1572,13 +1656,34 @@ class VKAdapter(BasePlatformAdapter):
         params = {
             "event_id": event_id,
             "peer_id": peer_id,
-            "user_id": user_id if user_id else peer_id,
         }
+        if user_id:
+            params["user_id"] = user_id
+        elif user_id == 0:
+            logger.warning(
+                "[VK] ⚠️ user_id is 0 for callback event %s, peer_id=%s — VK API will reject this",
+                event_id, peer_id,
+            )
+        else:
+            logger.debug(
+                "[VK] user_id missing for callback event %s, peer_id=%s",
+                event_id, peer_id,
+            )
         if event_data:
             params["event_data"] = event_data
 
         try:
-            await self._vk_api_call("messages.sendMessageEventAnswer", params)
+            result = await self._vk_api_call("messages.sendMessageEventAnswer", params)
+            if result and "error" in result:
+                logger.warning(
+                    "[VK] ⚠️ sendMessageEventAnswer failed: event_id=%s error=%s",
+                    event_id, result["error"].get("error_msg", str(result["error"])),
+                )
+            else:
+                logger.debug(
+                    "[VK] ✅ sendMessageEventAnswer succeeded: event_id=%s",
+                    event_id,
+                )
         except Exception as e:
             logger.warning("[VK] Failed to answer callback event %s: %s", event_id, e)
 
